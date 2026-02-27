@@ -94,6 +94,10 @@ def get_chat_response(history):
     except Exception as e:
         print(f"OPENAI API ERROR: {e}")
         return None
+        
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -162,5 +166,4 @@ def chat():
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {e}")
         return jsonify({"response": "I'm having a little trouble. Can we start again? What is your **Name**?"})
-        
 # No app.run() here — let Gunicorn handle it.
