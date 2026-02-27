@@ -8,10 +8,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from datetime import datetime
 
+# Initialize
 load_dotenv()
-
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-final-v3")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-final-v4")
 
 # --- MAIL CONFIG ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -26,19 +26,15 @@ mail = Mail(app)
 COLLECTION_PROMPT = "You are a helpful assistant for ACME Plumbing. Provide emergency advice once details are collected."
 
 def send_email_async(app_context, data):
-    """Background task to send the professional formatted work order."""
     with app_context:
         try:
             work_order_id = datetime.now().strftime("%H%M%S")
             current_date = datetime.now().strftime("%Y-%m-%d")
-
             msg = Message(
                 subject=f"URGENT: Work Order {work_order_id} - {data.get('name')}",
                 recipients=[data.get('email')]
             )
             msg.cc = [os.getenv("MAIL_USERNAME")]
-            
-            # THE PROFESSIONAL TOUCH - RESTORED
             msg.body = f"""
 ==================================================
            ACME PLUMBING - OFFICIAL WORK ORDER
@@ -78,98 +74,93 @@ any specialized parts required.
 ==================================================
 """
             mail.send(msg)
-            print(f"BACKGROUND SUCCESS: Work Order {work_order_id} sent.")
         except Exception as e:
             print(f"BACKGROUND MAIL ERROR: {e}")
 
 def get_chat_response(history):
     try:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key: return "Please turn off your water main immediately."
+        if not api_key: 
+            print("ERROR: OpenAI API Key is missing from Environment Variables!")
+            return None # Return None so we can handle the fallback
+        
         client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=history, max_tokens=150)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo", 
+            messages=history, 
+            max_tokens=150
+        )
         return response.choices[0].message.content
-    except:
-        return "I've logged your emergency. Please turn off your stopcock clockwise now."
-
-@app.route('/')
-def index():
-    return render_template('index.html')
+    except Exception as e:
+        print(f"OPENAI API ERROR: {e}")
+        return None
 
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
         user_input = request.json.get("message", "").strip()
         
+        # 1. Initialize session carefully
         if "data" not in session:
             session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         if "history" not in session:
             session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
             session["email_sent"] = False
 
+        data = session["data"]
+        
+        # Reset command
         if user_input.lower() == "reset":
             session.clear()
-            return jsonify({"response": "System reset. How can ACME Plumbing help you today?"})
+            return jsonify({"response": "System reset. How can I help today?"})
 
-        data = session["data"]
-
-        # 1. NAME 
+        # 2. Logic Gates (Same as before)
         if not data.get("name"):
-            greetings = ["hi", "hello", "hey", "help", "emergency"]
+            greetings = ["hi", "hello", "hey", "help"]
             if any(word in user_input.lower() for word in greetings) or len(user_input) > 20:
-                reply = "I'm sorry to hear you're having trouble! I can certainly get a plumber out. To start the work order, **what is your Name?**"
+                reply = "I'm sorry to hear that! To help you, what is your **Name**?"
             else:
                 data["name"] = user_input
-                reply = f"Thank you, {user_input}. What is a good **Phone Number**?"
-
-        # 2. PHONE
+                reply = f"Thanks {user_input}! What's your **Phone Number**?"
         elif not data.get("phone"):
             data["phone"] = user_input
-            reply = "And what is your **Email Address** for the work order?"
-
-        # 3. EMAIL (With Validation)
+            reply = "And your **Email**?"
         elif not data.get("email"):
-            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            if re.match(email_pattern, user_input):
-                data["email"] = user_input
-                reply = "Got it. What is the **Full Address** where the emergency is happening?"
-            else:
-                reply = "That doesn't look like a valid email. Please check the spelling?"
-
-        # 4. ADDRESS
+            data["email"] = user_input
+            reply = "What is the **Address**?"
         elif not data.get("address"):
             data["address"] = user_input
-            reply = "One last thing: **What is the plumbing emergency?**"
-
-        # 5. ISSUE & BACKGROUND EMAIL
-        elif not data.get("issue"):
-            data["issue"] = user_input
-            if not session.get("email_sent"):
-                # Run the work order email in the background
-                thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
-                thread.start()
-                session["email_sent"] = True
-            
-            history = session.get("history", [])
-            reply = get_chat_response(history + [{"role": "user", "content": user_input}])
-        
+            reply = "What is the **Plumbing Issue**?"
         else:
-            history = session.get("history", [])
-            reply = get_chat_response(history + [{"role": "user", "content": user_input}])
+            # 3. Handle the actual AI chat
+            if not data.get("issue"):
+                data["issue"] = user_input
+                if not session.get("email_sent"):
+                    thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
+                    thread.start()
+                    session["email_sent"] = True
 
-        # Update Session
+            # Call AI
+            ai_reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            
+            # If AI fails, use a more helpful fallback than just the stopcock line
+            if ai_reply:
+                reply = ai_reply
+            else:
+                reply = "I've logged your details for the plumber. While you wait, please ensure your stopcock is off."
+
+        # 4. Save History
+        history = session.get("history", [])
+        history.append({"role": "user", "content": user_input})
+        history.append({"role": "assistant", "content": reply})
+        session["history"] = history
         session["data"] = data
-        new_history = session.get("history", [])
-        new_history.append({"role": "user", "content": user_input})
-        new_history.append({"role": "assistant", "content": reply})
-        session["history"] = new_history
         session.modified = True
+        
         return jsonify({"response": reply})
 
     except Exception as e:
-        print(f"CHAT ERROR: {e}")
-        return jsonify({"response": "I'm still here! Could you please type that again?"})
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+        print(f"CRITICAL CHAT ERROR: {e}")
+        return jsonify({"response": "I'm having a little trouble. Can we start again? What is your **Name**?"})
+        
+# No app.run() here — let Gunicorn handle it.
