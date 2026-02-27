@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACME Plumbing Assistant</title>
+    <style>
+        :root {
+            --primary-color: #0056b3;
+            --secondary-color: #f8f9fa;
+            --bot-msg-color: #e9ecef;
+            --user-msg-color: #007bff;
+        }
+
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ccc; }
+
+        /* --- Launcher Button --- */
+        #chat-launcher {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--primary-color);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 999;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* --- Main Container --- */
+        #chat-container {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            width: 380px;
+            max-width: 90vw;
+            height: 600px;
+            max-height: 80vh;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 1000;
+        }
+
+        /* --- Header --- */
+        #chat-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: move;
+            user-select: none;
+        }
+
+        #chat-header h3 { margin: 0; font-size: 16px; }
+
+        #min-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0 5px;
+        }
+
+        /* --- Emergency Bar --- */
+        .emergency-bar {
+            background: #ffcccc;
+            color: #b30000;
+            padding: 8px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: bold;
+            border-bottom: 1px solid #ff9999;
+        }
+
+        /* --- Chat Messages Area --- */
+        #chat-box {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: #fdfdfd;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 10px 15px;
+            border-radius: 15px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .bot-message {
+            align-self: flex-start;
+            background: var(--bot-msg-color);
+            color: #333;
+            border-bottom-left-radius: 2px;
+        }
+
+        .user-message {
+            align-self: flex-end;
+            background: var(--user-msg-color);
+            color: white;
+            border-bottom-right-radius: 2px;
+        }
+
+        /* --- Input Area --- */
+        #input-area {
+            padding: 15px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 10px;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            outline: none;
+        }
+
+        #send-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #send-btn:hover { background: #004494; }
+
+    </style>
+</head>
+<body>
+
+    <div id="chat-launcher" onclick="toggleChat()">
+        <span>💬</span> Chat with ACME
+    </div>
+
+    <div id="chat-container">
+        <div id="chat-header">
+            <h3>ACME Plumbing Assistant</h3>
+            <button id="min-btn" onclick="toggleChat()">−</button>
+        </div>
+
+        <div class="emergency-bar">
+            🚨 Flooding or Burst Pipe? Call 0800-ACME-NOW
+        </div>
+
+        <div id="chat-box">
+            <div class="message bot-message">
+                Hello! Welcome to ACME Plumbing. I'm your virtual assistant. How can I help you with your pipes or water heater today?
+            </div>
+        </div>
+
+        <div id="input-area">
+            <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+            <button id="send-btn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        // --- VISIBILITY LOGIC ---
+        function toggleChat() {
+            const container = document.getElementById('chat-container');
+            const launcher = document.getElementById('chat-launcher');
+            
+            if (container.style.display === "none" || container.style.display === "") {
+                container.style.display = "flex";
+                launcher.style.display = "none";
+            } else {
+                container.style.display = "none";
+                launcher.style.display = "flex";
+            }
+        }
+
+        // --- MESSAGE LOGIC ---
+        async function sendMessage() {
+            const input = document.getElementById("user-input");
+            const chatBox = document.getElementById("chat-box");
+            const text = input.value.trim();
+
+            if (!text) return;
+
+            // Add User Message
+            appendMessage("user", text);
+            input.value = "";
+
+            // Add Typing Indicator
+            const typingId = appendMessage("bot", "<i>Typing...</i>");
+
+            try {
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: text })
+                });
+
+                const data = await response.json();
+                
+                // Replace typing indicator with real message
+                document.getElementById(typingId).remove();
+                appendMessage("bot", data.response);
+
+            } catch (error) {
+                document.getElementById(typingId).innerHTML = "Error connecting to server.";
+            }
+        }
+
+        function appendMessage(sender, text) {
+            const chatBox = document.getElementById("chat-box");
+            const div = document.createElement("div");
+            const id = "msg-" + Date.now();
+            div.id = id;
+            div.className = `message ${sender}-message`;
+            div.innerHTML = text.replace(/\n/g, "<br>");
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return id;
+        }
+
+        // Handle "Enter" Key
+        document.getElementById("user-input").addEventListener("keypress", (e) => {
+            if (e.key === "Enter") sendMessage();
+        });
+
+        // --- DRAGGABLE LOGIC (Desktop Only) ---
+        const container = document.getElementById("chat-container");
+        const header = document.getElementById("chat-header");
+
+        header.onmousedown = function(e) {
+            if (e.target.id === 'min-btn') return;
+
+            let shiftX = e.clientX - container.getBoundingClientRect().left;
+            let shiftY = e.clientY - container.getBoundingClientRect().top;
+
+            function moveAt(pageX, pageY) {
+                container.style.left = pageX - shiftX + 'px';
+                container.style.top = pageY - shiftY + 'px';
+                container.style.bottom = 'auto';
+                container.style.right = 'auto';
+            }
+
+            function onMouseMove(e) { moveAt(e.pageX, e.pageY); }
+
+            document.addEventListener('mousemove', onMouseMove);
+
+            document.onmouseup = function() {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.onmouseup = null;
+            };
+        };
+
+        header.ondragstart = () => false;
+
+window.onload = function() {
+    setTimeout(() => {
+        const container = document.getElementById('chat-container');
+        const launcher = document.getElementById('chat-launcher');
+        
+        // Only pop open if the user hasn't already opened it
+        if (container.style.display === "none" || container.style.display === "") {
+            toggleChat();
+            // Optional: You could even play a small notification sound here
+        }
+    }, 5000); // 5000 milliseconds = 5 seconds
+};
+
+    </script>
+</body>
+</html>
