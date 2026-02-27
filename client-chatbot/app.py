@@ -107,56 +107,68 @@ def chat():
     try:
         user_input = request.json.get("message", "").strip()
         
+        # 1. Initialize session variables if they are missing
         if "data" not in session:
             session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         if "history" not in session:
             session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
             session["email_sent"] = False
 
+        # Handle Reset
         if user_input.lower() == "reset":
             session.clear()
-            return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name**?"})
+            return jsonify({"response": "System reset. Welcome! What is your **Name**?"})
 
         data = session["data"]
-        history = session["history"]
 
-        # Step-by-step data collection logic
-        if not data["name"]:
+        # 2. DATA COLLECTION GATEKEEPER
+        # We only move to the next step if the previous one is filled
+        if not data.get("name"):
             data["name"] = user_input
             reply = f"Hello {user_input}! What is a good **Phone Number** for the plumber to reach you?"
-        elif not data["phone"]:
+        elif not data.get("phone"):
             data["phone"] = user_input
             reply = "And what is your **Email Address** for the work order?"
-        elif not data["email"]:
+        elif not data.get("email"):
             data["email"] = user_input
             reply = "Got it. What is the **Full Address** where the emergency is happening?"
-        elif not data["address"]:
+        elif not data.get("address"):
             data["address"] = user_input
             reply = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
-        elif not data["issue"]:
+        elif not data.get("issue"):
             data["issue"] = user_input
-            # Now trigger the professional email
-            if not session.get("email_sent"):
+            
+            # --- FINAL STEP: ONLY NOW DO WE TRY EMAIL AND AI ---
+            if data.get("email") and not session.get("email_sent", False):
                 send_lead_email(data)
                 session["email_sent"] = True
             
+            # Get AI Advice
+            history = session.get("history", [])
             history.append({"role": "user", "content": user_input})
             reply = get_chat_response(history)
+            session["history"] = history
         else:
+            # Standard conversation if all data is already collected
+            history = session.get("history", [])
             history.append({"role": "user", "content": user_input})
             reply = get_chat_response(history)
+            session["history"] = history
 
-        # Save back to session
-        history.append({"role": "assistant", "content": reply})
+        # 3. SAVE AND RESPOND
         session["data"] = data
-        session["history"] = history
-        session.modified = True
+        # Update history with the bot's reply
+        temp_history = session.get("history", [])
+        temp_history.append({"role": "assistant", "content": reply})
+        session["history"] = temp_history
         
+        session.modified = True 
         return jsonify({"response": reply})
 
     except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
-        return jsonify({"response": "I'm having a quick technical hiccup. Could you please tell me your **Name** again?"})
+        # This catches the crash and prevents the "Error connecting to server"
+        print(f"CRITICAL CHAT ERROR: {e}")
+        return jsonify({"response": "I'm here! I just had a connection blip. Could you please type that again?"})
 
 if __name__ == '__main__':
     app.run(debug=True)
