@@ -112,8 +112,8 @@ IMPORTANT INSTRUCTIONS:
 3. Our technician will confirm arrival via phone.
 --------------------------------------------------
 ESTIMATED COSTS (Emergency Call-Out):
-- Call-Out Fee (First Hour):  \u00A395.00
-- Additional Hourly Rate:     \u00A365.00
+- Call-Out Fee (First Hour):  £95.00
+- Additional Hourly Rate:     £65.00
 
 *All prices are subject to VAT where applicable.*
 --------------------------------------------------
@@ -125,10 +125,15 @@ any specialized parts required. You will be asked to
 authorize any significant costs before work commences.
 ==================================================
 """
+        # This is where Render usually blocks the connection
         mail.send(msg)
+        print(f"SUCCESS: Work Order {work_order_id} sent.")
         return True
+
     except Exception as e:
-        print(f"MAIL ERROR: {e}")
+        # This prevents the "Error connecting to server" crash
+        print(f"MAIL ERROR for Work Order {work_order_id}: {e}")
+        # Returning False allows the bot to skip the email and finish the chat
         return False
 
 def get_chat_response(history):
