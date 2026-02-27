@@ -8,12 +8,11 @@ from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 from openai import OpenAI
 from datetime import datetime
-import csv
-
 
 load_dotenv()
 
 app = Flask(__name__)
+# Using a fallback for the secret key to ensure the session always works
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "super-secret-plumbing-key")
 
 # --- MAIL CONFIG ---
@@ -26,53 +25,11 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv("MAIL_USERNAME")
 mail = Mail(app)
 
 # --- AI CONFIG ---
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+COLLECTION_PROMPT = "You are a helpful assistant for ACME Plumbing. Provide emergency advice once details are collected."
 
-# --- LIMITER ---
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
-
-# --- PROMPTS ---
-COLLECTION_PROMPT = "You are a helpful plumbing assistant. Be brief. Your goal is to collect Name, Phone, Email, Address, and the Nature of the Emergency."
-SUPPORT_PROMPT = "The work order has been sent. You are now a supportive assistant. Advise the user to stay safe and turn off their water."
-
-# --- HELPERS ---
 def get_next_work_order_number():
-    # This creates a unique ID based on the Month, Day, Hour, and Minute
-    # Example: ACME-0226-1645
-    return f"ACME-{datetime.now().strftime('%m%d-%H%M')}"
-
-import csv
-
-def log_lead_to_csv(data):
-    file_path = 'acme_leads.csv'
-    # The columns we want in our spreadsheet
-    headers = ['Date', 'Name', 'Phone', 'Email', 'Address', 'Issue']
-    
-    # Check if the file exists to decide if we need to write the header
-    file_exists = os.path.isfile(file_path)
-    
-    try:
-        with open(file_path, mode='a', newline='', encoding='utf-8') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            
-            # Write the header only once at the top of the file
-            if not file_exists:
-                writer.writeheader()
-            
-            # Add the data row
-            writer.writerow({
-                'Date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'Name': data.get('name'),
-                'Phone': data.get('phone'),
-                'Email': data.get('email'),
-                'Address': data.get('address'),
-                'Issue': data.get('issue')
-            })
-        print(">>> SUCCESS: Lead logged to acme_leads.csv")
-        return True
-    except Exception as e:
-        print(f"CSV LOG ERROR: {e}")
-        return False
+    # Placeholder for your actual work order logic
+    return datetime.now().strftime("%H%M%S")
 
 def send_lead_email(customer_email):
     try:
@@ -125,60 +82,49 @@ any specialized parts required. You will be asked to
 authorize any significant costs before work commences.
 ==================================================
 """
-        # This is where Render usually blocks the connection
         mail.send(msg)
         print(f"SUCCESS: Work Order {work_order_id} sent.")
         return True
-
     except Exception as e:
-        # This prevents the "Error connecting to server" crash
-        print(f"MAIL ERROR for Work Order {work_order_id}: {e}")
-        # Returning False allows the bot to skip the email and finish the chat
+        print(f"MAIL ERROR: {e}")
         return False
 
 def get_chat_response(history):
     try:
-        # OpenAI uses the 'messages' list directly, we don't need 'start_chat'
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return "I've received your details. Please ensure your water is turned off while we process your request."
+        
+        client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=history[-10:], # Send the last 10 messages for context
+            messages=history,
             max_tokens=150
         )
         return response.choices[0].message.content
     except Exception as e:
         print(f"AI ERROR: {e}")
-        return "I've received your details and a plumber is being notified. Please ensure your main water valve is turned off while you wait."
+        return "I've received your details and a plumber is being notified. Please turn off your water main immediately."
 
-# --- ROUTES ---
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    # Get the message from the website front-end
     user_input = request.json.get("message", "").strip()
     
-    # 1. Initialize Session if it's a new conversation
     if "data" not in session:
         session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
     if "history" not in session:
-        # COLLECTION_PROMPT should be defined at the top of your app.py
         session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
         session["email_sent"] = False
 
-    # 2. Handle Reset Command
     if user_input.lower() == "reset":
         session.clear()
-        session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
-        session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
-        session["email_sent"] = False
-        return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name** to begin?"})
+        return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name**?"})
 
-    # 3. Add User Message to History (OpenAI Dictionary Format)
     session["history"].append({"role": "user", "content": user_input})
-
-    # 4. Data Collection Logic (The "Form Filler")
     data = session["data"]
     
     if not data["name"]:
@@ -195,29 +141,18 @@ def chat():
         response_text = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
     elif not data["issue"]:
         data["issue"] = user_input
-        
-        # --- ALL DATA COLLECTED: PROCESS LEAD ---
-        print(f"--- !!! ALL DATA FOUND: PROCESSING LEAD FOR {data['name']} !!! ---")
-        
         if not session.get("email_sent"):
-            # This calls your function with the 'try/except' block
-            send_lead_email(data["email"]) 
+            send_lead_email(data["email"])
             session["email_sent"] = True
-        
-        # Now get the AI's response/advice for the emergency
         response_text = get_chat_response(session["history"])
     else:
-        # If all data is already collected, just let the AI handle the chat
         response_text = get_chat_response(session["history"])
 
-    # Update session data and save history
     session["data"] = data
     session["history"].append({"role": "assistant", "content": response_text})
-    
-    # CRITICAL: Tell Flask the session has changed so it saves to the cookie
     session.modified = True 
     
     return jsonify({"response": response_text})
 
 if __name__ == '__main__':
-    app.run(port=5001, debug=True)
+    app.run(debug=True)
