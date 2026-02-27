@@ -9,8 +9,7 @@ from datetime import datetime
 load_dotenv()
 
 app = Flask(__name__)
-# Fallback key ensures sessions work even if env var is missing
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-123")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-12345")
 
 # --- MAIL CONFIG ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -24,20 +23,17 @@ mail = Mail(app)
 # --- AI CONFIG ---
 COLLECTION_PROMPT = "You are a helpful assistant for ACME Plumbing. Provide emergency advice once details are collected."
 
-def get_next_work_order_number():
-    return datetime.now().strftime("%H%M%S")
-
-def send_lead_email(customer_email):
-    """Sends the formal work order email with a safety net to prevent crashes."""
+def send_lead_email(data):
+    """Sends the professional formatted work order email."""
     try:
-        work_order_id = get_next_work_order_number()
+        work_order_id = datetime.now().strftime("%H%M%S")
         current_date = datetime.now().strftime("%Y-%m-%d")
-        data = session.get("data", {})
 
         msg = Message(
             subject=f"URGENT: Work Order {work_order_id} - {data.get('name')}",
-            recipients=[customer_email]
+            recipients=[data.get('email')]
         )
+        # Optional: CC yourself so you see the leads coming in
         msg.cc = [os.getenv("MAIL_USERNAME")]
 
         msg.body = f"""
@@ -79,29 +75,28 @@ any specialized parts required.
 ==================================================
 """
         mail.send(msg)
-        print(f"SUCCESS: Email sent for WO {work_order_id}")
+        print(f"SUCCESS: Professional Work Order {work_order_id} sent.")
         return True
     except Exception as e:
-        print(f"MAIL ERROR (likely Render port block): {e}")
+        print(f"MAIL ERROR: {e}")
         return False
 
 def get_chat_response(history):
-    """Calls OpenAI safely. Falls back to text if API fails."""
     try:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return "I've logged your emergency. Please turn off your water main immediately."
+        if not api_key: 
+            return "I've logged your emergency. Please turn off your water main immediately while a plumber is dispatched."
         
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=history,
+            model="gpt-3.5-turbo", 
+            messages=history, 
             max_tokens=150
         )
         return response.choices[0].message.content
     except Exception as e:
         print(f"AI ERROR: {e}")
-        return "A plumber has been notified. Please ensure your stopcock is turned off while you wait."
+        return "I've received your details and a plumber is being notified. Please turn off your water main immediately."
 
 @app.route('/')
 def index():
@@ -112,7 +107,6 @@ def chat():
     try:
         user_input = request.json.get("message", "").strip()
         
-        # 1. Initialize session variables
         if "data" not in session:
             session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         if "history" not in session:
@@ -121,49 +115,48 @@ def chat():
 
         if user_input.lower() == "reset":
             session.clear()
-            return jsonify({"response": "System reset. What is your **Name**?"})
+            return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name**?"})
 
-        # 2. Add user input to local history copy
-        current_history = session.get("history", [])
-        current_history.append({"role": "user", "content": user_input})
-        
-        # 3. Pull data into local variable to edit
         data = session["data"]
-        
-        # 4. Sequential Data Collection Logic
-        if not data.get("name"):
-            data["name"] = user_input
-            response_text = f"Hello {user_input}! What is a good **Phone Number** for the plumber to reach you?"
-        elif not data.get("phone"):
-            data["phone"] = user_input
-            response_text = "And what is your **Email Address** for the work order?"
-        elif not data.get("email"):
-            data["email"] = user_input
-            response_text = "Got it. What is the **Full Address** where the emergency is happening?"
-        elif not data.get("address"):
-            data["address"] = user_input
-            response_text = "Final question: **What is the plumbing emergency?** (e.g., burst pipe, boiler leak)"
-        elif not data.get("issue"):
-            data["issue"] = user_input
-            # Now that all data is collected, try to send the email
-            if not session.get("email_sent"):
-                send_lead_email(data["email"])
-                session["email_sent"] = True
-            response_text = get_chat_response(current_history)
-        else:
-            response_text = get_chat_response(current_history)
+        history = session["history"]
 
-        # 5. Save everything back to session
-        current_history.append({"role": "assistant", "content": response_text})
-        session["history"] = current_history
+        # Step-by-step data collection logic
+        if not data["name"]:
+            data["name"] = user_input
+            reply = f"Hello {user_input}! What is a good **Phone Number** for the plumber to reach you?"
+        elif not data["phone"]:
+            data["phone"] = user_input
+            reply = "And what is your **Email Address** for the work order?"
+        elif not data["email"]:
+            data["email"] = user_input
+            reply = "Got it. What is the **Full Address** where the emergency is happening?"
+        elif not data["address"]:
+            data["address"] = user_input
+            reply = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
+        elif not data["issue"]:
+            data["issue"] = user_input
+            # Now trigger the professional email
+            if not session.get("email_sent"):
+                send_lead_email(data)
+                session["email_sent"] = True
+            
+            history.append({"role": "user", "content": user_input})
+            reply = get_chat_response(history)
+        else:
+            history.append({"role": "user", "content": user_input})
+            reply = get_chat_response(history)
+
+        # Save back to session
+        history.append({"role": "assistant", "content": reply})
         session["data"] = data
-        session.modified = True 
+        session["history"] = history
+        session.modified = True
         
-        return jsonify({"response": response_text})
+        return jsonify({"response": reply})
 
     except Exception as e:
-        print(f"CRITICAL CHAT ERROR: {e}")
-        return jsonify({"response": "Technical hiccup. Could you please try your last message again?"})
+        print(f"CRITICAL ERROR: {e}")
+        return jsonify({"response": "I'm having a quick technical hiccup. Could you please tell me your **Name** again?"})
 
 if __name__ == '__main__':
     app.run(debug=True)
