@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
+import re
+import threading
 from flask import Flask, render_template, request, jsonify, session
 from flask_mail import Mail, Message
 from dotenv import load_dotenv
@@ -9,7 +11,7 @@ from datetime import datetime
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-12345")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-final-v3")
 
 # --- MAIL CONFIG ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -23,20 +25,21 @@ mail = Mail(app)
 # --- AI CONFIG ---
 COLLECTION_PROMPT = "You are a helpful assistant for ACME Plumbing. Provide emergency advice once details are collected."
 
-def send_lead_email(data):
-    """Sends the professional formatted work order email."""
-    try:
-        work_order_id = datetime.now().strftime("%H%M%S")
-        current_date = datetime.now().strftime("%Y-%m-%d")
+def send_email_async(app_context, data):
+    """Background task to send the professional formatted work order."""
+    with app_context:
+        try:
+            work_order_id = datetime.now().strftime("%H%M%S")
+            current_date = datetime.now().strftime("%Y-%m-%d")
 
-        msg = Message(
-            subject=f"URGENT: Work Order {work_order_id} - {data.get('name')}",
-            recipients=[data.get('email')]
-        )
-        # Optional: CC yourself so you see the leads coming in
-        msg.cc = [os.getenv("MAIL_USERNAME")]
-
-        msg.body = f"""
+            msg = Message(
+                subject=f"URGENT: Work Order {work_order_id} - {data.get('name')}",
+                recipients=[data.get('email')]
+            )
+            msg.cc = [os.getenv("MAIL_USERNAME")]
+            
+            # THE PROFESSIONAL TOUCH - RESTORED
+            msg.body = f"""
 ==================================================
            ACME PLUMBING - OFFICIAL WORK ORDER
 ==================================================
@@ -74,29 +77,20 @@ the complexity of the repair, time spent on-site, and
 any specialized parts required.
 ==================================================
 """
-        mail.send(msg)
-        print(f"SUCCESS: Professional Work Order {work_order_id} sent.")
-        return True
-    except Exception as e:
-        print(f"MAIL ERROR: {e}")
-        return False
+            mail.send(msg)
+            print(f"BACKGROUND SUCCESS: Work Order {work_order_id} sent.")
+        except Exception as e:
+            print(f"BACKGROUND MAIL ERROR: {e}")
 
 def get_chat_response(history):
     try:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key: 
-            return "I've logged your emergency. Please turn off your water main immediately while a plumber is dispatched."
-        
+        if not api_key: return "Please turn off your water main immediately."
         client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", 
-            messages=history, 
-            max_tokens=150
-        )
+        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=history, max_tokens=150)
         return response.choices[0].message.content
-    except Exception as e:
-        print(f"AI ERROR: {e}")
-        return "I've received your details and a plumber is being notified. Please turn off your water main immediately."
+    except:
+        return "I've logged your emergency. Please turn off your stopcock clockwise now."
 
 @app.route('/')
 def index():
@@ -119,73 +113,63 @@ def chat():
 
         data = session["data"]
 
-        # --- STEP 1: ESTABLISH CONTACT & GET NAME ---
+        # 1. NAME 
         if not data.get("name"):
-            # If they haven't given a name yet, check if their message is just a greeting or a problem
-            greetings = ["hi", "hello", "hey", "help", "emergency", "plumber"]
-            
-            # If they just said "Hi" or described a problem without a name
-            if any(word in user_input.lower() for word in greetings) or len(user_input) > 15:
-                reply = "I'm sorry to hear you're having trouble! I can certainly get a plumber out to you. To start the work order, **what is your Name?**"
+            greetings = ["hi", "hello", "hey", "help", "emergency"]
+            if any(word in user_input.lower() for word in greetings) or len(user_input) > 20:
+                reply = "I'm sorry to hear you're having trouble! I can certainly get a plumber out. To start the work order, **what is your Name?**"
             else:
-                # If they actually typed a name-like string
                 data["name"] = user_input
-                reply = f"Thank you, {user_input}. What is a good **Phone Number** for the plumber to reach you?"
-        
-        # --- STEP 2: PHONE (With simple length check) ---
+                reply = f"Thank you, {user_input}. What is a good **Phone Number**?"
+
+        # 2. PHONE
         elif not data.get("phone"):
-            # Basic check: Is it mostly digits and at least 10 characters?
-            clean_phone = ''.join(filter(str.isdigit, user_input))
-            if len(clean_phone) >= 10:
-                data["phone"] = user_input
-                reply = "Got it. And what is your **Email Address** so I can send over the work order?"
-            else:
-                reply = "I'll need a valid **Phone Number** so the plumber can call you when they are outside. What's the best number?"
-       
-        # --- STEP 3: EMAIL (With Validation) ---
+            data["phone"] = user_input
+            reply = "And what is your **Email Address** for the work order?"
+
+        # 3. EMAIL (With Validation)
         elif not data.get("email"):
-            # A simple regex pattern for email validation
             email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            
             if re.match(email_pattern, user_input):
                 data["email"] = user_input
-                reply = "Perfect. What is the **Full Address** where the emergency is happening?"
+                reply = "Got it. What is the **Full Address** where the emergency is happening?"
             else:
-                reply = "That doesn't look quite right. Could you please double-check your **Email Address**? (e.g., name@email.com)"
-        
-        # --- STEP 4: ADDRESS ---
+                reply = "That doesn't look like a valid email. Please check the spelling?"
+
+        # 4. ADDRESS
         elif not data.get("address"):
             data["address"] = user_input
-            reply = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak, no hot water)"
+            reply = "One last thing: **What is the plumbing emergency?**"
 
-        # --- STEP 5: ISSUE & SEND ---
+        # 5. ISSUE & BACKGROUND EMAIL
         elif not data.get("issue"):
             data["issue"] = user_input
-            
             if not session.get("email_sent"):
-                # Use the background thread we set up earlier to prevent timeouts!
+                # Run the work order email in the background
                 thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
                 thread.start()
                 session["email_sent"] = True
             
-            reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            history = session.get("history", [])
+            reply = get_chat_response(history + [{"role": "user", "content": user_input}])
         
-        # --- STEP 6: CHAT ---
         else:
-            reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            history = session.get("history", [])
+            reply = get_chat_response(history + [{"role": "user", "content": user_input}])
 
-        # Save session
+        # Update Session
         session["data"] = data
         new_history = session.get("history", [])
         new_history.append({"role": "user", "content": user_input})
         new_history.append({"role": "assistant", "content": reply})
         session["history"] = new_history
-        session.modified = True 
-        
+        session.modified = True
         return jsonify({"response": reply})
 
     except Exception as e:
         print(f"CHAT ERROR: {e}")
-        return jsonify({"response": "I'm still here! Please tell me your **Name** so I can continue."})
+        return jsonify({"response": "I'm still here! Could you please type that again?"})
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
