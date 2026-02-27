@@ -8,10 +8,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from datetime import datetime
 
-# Initialize
 load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-final-v4")
+# Safety fallback for the secret key
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "acme-emergency-session-final-v5")
 
 # --- MAIL CONFIG ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -74,29 +75,24 @@ any specialized parts required.
 ==================================================
 """
             mail.send(msg)
+            print(f"BACKGROUND SUCCESS: Work Order {work_order_id} sent.")
         except Exception as e:
             print(f"BACKGROUND MAIL ERROR: {e}")
 
 def get_chat_response(history):
     try:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key: 
-            print("ERROR: OpenAI API Key is missing from Environment Variables!")
-            return None # Return None so we can handle the fallback
-        
+        if not api_key: return None
         client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", 
-            messages=history, 
-            max_tokens=150
-        )
+        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=history, max_tokens=150)
         return response.choices[0].message.content
     except Exception as e:
-        print(f"OPENAI API ERROR: {e}")
+        print(f"AI ERROR: {e}")
         return None
-        
+
 @app.route('/')
 def index():
+    # This renders the index.html from the /templates folder
     return render_template('index.html')
 
 @app.route('/chat', methods=['POST'])
@@ -104,66 +100,66 @@ def chat():
     try:
         user_input = request.json.get("message", "").strip()
         
-        # 1. Initialize session carefully
+        # Initialize session keys if missing
         if "data" not in session:
             session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         if "history" not in session:
             session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
             session["email_sent"] = False
 
-        data = session["data"]
-        
-        # Reset command
         if user_input.lower() == "reset":
             session.clear()
-            return jsonify({"response": "System reset. How can I help today?"})
+            return jsonify({"response": "System reset. How can ACME Plumbing help?"})
 
-        # 2. Logic Gates (Same as before)
+        data = session["data"]
+        
+        # Logic Loop
         if not data.get("name"):
-            greetings = ["hi", "hello", "hey", "help"]
+            greetings = ["hi", "hello", "hey", "help", "emergency"]
             if any(word in user_input.lower() for word in greetings) or len(user_input) > 20:
-                reply = "I'm sorry to hear that! To help you, what is your **Name**?"
+                reply = "I'm sorry to hear that! I can help. To start, what is your **Name**?"
             else:
                 data["name"] = user_input
-                reply = f"Thanks {user_input}! What's your **Phone Number**?"
+                reply = f"Thank you, {user_input}. What is a good **Phone Number**?"
         elif not data.get("phone"):
             data["phone"] = user_input
-            reply = "And your **Email**?"
+            reply = "And what is your **Email Address**?"
         elif not data.get("email"):
-            data["email"] = user_input
-            reply = "What is the **Address**?"
+            if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user_input):
+                data["email"] = user_input
+                reply = "Got it. What is the **Full Address** of the emergency?"
+            else:
+                reply = "Please enter a valid email address so I can send the work order."
         elif not data.get("address"):
             data["address"] = user_input
-            reply = "What is the **Plumbing Issue**?"
-        else:
-            # 3. Handle the actual AI chat
-            if not data.get("issue"):
-                data["issue"] = user_input
-                if not session.get("email_sent"):
-                    thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
-                    thread.start()
-                    session["email_sent"] = True
-
-            # Call AI
-            ai_reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            reply = "One last thing: **What is the plumbing emergency?**"
+        elif not data.get("issue"):
+            data["issue"] = user_input
+            if not session.get("email_sent"):
+                thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
+                thread.start()
+                session["email_sent"] = True
             
-            # If AI fails, use a more helpful fallback than just the stopcock line
-            if ai_reply:
-                reply = ai_reply
-            else:
-                reply = "I've logged your details for the plumber. While you wait, please ensure your stopcock is off."
+            ai_reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            reply = ai_reply if ai_reply else "Details logged. Please turn off your stopcock clockwise now."
+        else:
+            ai_reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+            reply = ai_reply if ai_reply else "I've alerted the team. Please stay safe."
 
-        # 4. Save History
-        history = session.get("history", [])
-        history.append({"role": "user", "content": user_input})
-        history.append({"role": "assistant", "content": reply})
-        session["history"] = history
+        # Save session
         session["data"] = data
+        hist = session.get("history", [])
+        hist.append({"role": "user", "content": user_input})
+        hist.append({"role": "assistant", "content": reply})
+        session["history"] = hist
         session.modified = True
         
         return jsonify({"response": reply})
 
     except Exception as e:
         print(f"CRITICAL CHAT ERROR: {e}")
-        return jsonify({"response": "I'm having a little trouble. Can we start again? What is your **Name**?"})
-# No app.run() here — let Gunicorn handle it.
+        return jsonify({"response": "I'm having a connection issue. Can you please tell me your **Name** again?"})
+
+if __name__ == '__main__':
+    # For local testing
+    app.run(debug=True)
