@@ -107,68 +107,85 @@ def chat():
     try:
         user_input = request.json.get("message", "").strip()
         
-        # 1. Initialize session variables if they are missing
         if "data" not in session:
             session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         if "history" not in session:
             session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
             session["email_sent"] = False
 
-        # Handle Reset
         if user_input.lower() == "reset":
             session.clear()
-            return jsonify({"response": "System reset. Welcome! What is your **Name**?"})
+            return jsonify({"response": "System reset. How can ACME Plumbing help you today?"})
 
         data = session["data"]
 
-        # 2. DATA COLLECTION GATEKEEPER
-        # We only move to the next step if the previous one is filled
+        # --- STEP 1: ESTABLISH CONTACT & GET NAME ---
         if not data.get("name"):
-            data["name"] = user_input
-            reply = f"Hello {user_input}! What is a good **Phone Number** for the plumber to reach you?"
+            # If they haven't given a name yet, check if their message is just a greeting or a problem
+            greetings = ["hi", "hello", "hey", "help", "emergency", "plumber"]
+            
+            # If they just said "Hi" or described a problem without a name
+            if any(word in user_input.lower() for word in greetings) or len(user_input) > 15:
+                reply = "I'm sorry to hear you're having trouble! I can certainly get a plumber out to you. To start the work order, **what is your Name?**"
+            else:
+                # If they actually typed a name-like string
+                data["name"] = user_input
+                reply = f"Thank you, {user_input}. What is a good **Phone Number** for the plumber to reach you?"
+        
+        # --- STEP 2: PHONE (With simple length check) ---
         elif not data.get("phone"):
-            data["phone"] = user_input
-            reply = "And what is your **Email Address** for the work order?"
+            # Basic check: Is it mostly digits and at least 10 characters?
+            clean_phone = ''.join(filter(str.isdigit, user_input))
+            if len(clean_phone) >= 10:
+                data["phone"] = user_input
+                reply = "Got it. And what is your **Email Address** so I can send over the work order?"
+            else:
+                reply = "I'll need a valid **Phone Number** so the plumber can call you when they are outside. What's the best number?"
+       
+        # --- STEP 3: EMAIL (With Validation) ---
         elif not data.get("email"):
-            data["email"] = user_input
-            reply = "Got it. What is the **Full Address** where the emergency is happening?"
+            # A simple regex pattern for email validation
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            
+            if re.match(email_pattern, user_input):
+                data["email"] = user_input
+                reply = "Perfect. What is the **Full Address** where the emergency is happening?"
+            else:
+                reply = "That doesn't look quite right. Could you please double-check your **Email Address**? (e.g., name@email.com)"
+        
+        # --- STEP 4: ADDRESS ---
         elif not data.get("address"):
             data["address"] = user_input
-            reply = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
+            reply = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak, no hot water)"
+
+        # --- STEP 5: ISSUE & SEND ---
         elif not data.get("issue"):
             data["issue"] = user_input
             
-            # --- FINAL STEP: ONLY NOW DO WE TRY EMAIL AND AI ---
-            if data.get("email") and not session.get("email_sent", False):
-                send_lead_email(data)
+            if not session.get("email_sent"):
+                # Use the background thread we set up earlier to prevent timeouts!
+                thread = threading.Thread(target=send_email_async, args=(app.app_context(), data.copy()))
+                thread.start()
                 session["email_sent"] = True
             
-            # Get AI Advice
-            history = session.get("history", [])
-            history.append({"role": "user", "content": user_input})
-            reply = get_chat_response(history)
-            session["history"] = history
-        else:
-            # Standard conversation if all data is already collected
-            history = session.get("history", [])
-            history.append({"role": "user", "content": user_input})
-            reply = get_chat_response(history)
-            session["history"] = history
-
-        # 3. SAVE AND RESPOND
-        session["data"] = data
-        # Update history with the bot's reply
-        temp_history = session.get("history", [])
-        temp_history.append({"role": "assistant", "content": reply})
-        session["history"] = temp_history
+            reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
         
+        # --- STEP 6: CHAT ---
+        else:
+            reply = get_chat_response(session["history"] + [{"role": "user", "content": user_input}])
+
+        # Save session
+        session["data"] = data
+        new_history = session.get("history", [])
+        new_history.append({"role": "user", "content": user_input})
+        new_history.append({"role": "assistant", "content": reply})
+        session["history"] = new_history
         session.modified = True 
+        
         return jsonify({"response": reply})
 
     except Exception as e:
-        # This catches the crash and prevents the "Error connecting to server"
-        print(f"CRITICAL CHAT ERROR: {e}")
-        return jsonify({"response": "I'm here! I just had a connection blip. Could you please type that again?"})
-
+        print(f"CHAT ERROR: {e}")
+        return jsonify({"response": "I'm still here! Please tell me your **Name** so I can continue."})
 if __name__ == '__main__':
     app.run(debug=True)
