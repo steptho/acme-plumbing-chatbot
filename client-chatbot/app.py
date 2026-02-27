@@ -148,6 +148,7 @@ def get_chat_response(history):
     except Exception as e:
         print(f"AI ERROR: {e}")
         return "I've received your details and a plumber is being notified. Please ensure your main water valve is turned off while you wait."
+
 # --- ROUTES ---
 @app.route('/')
 def index():
@@ -155,106 +156,68 @@ def index():
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    # Get the message from the website front-end
     user_input = request.json.get("message", "").strip()
     
-    # 1. Initialize Session
+    # 1. Initialize Session if it's a new conversation
     if "data" not in session:
         session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
     if "history" not in session:
+        # COLLECTION_PROMPT should be defined at the top of your app.py
         session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
         session["email_sent"] = False
 
+    # 2. Handle Reset Command
     if user_input.lower() == "reset":
         session.clear()
         session["data"] = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
         session["history"] = [{"role": "system", "content": COLLECTION_PROMPT}]
         session["email_sent"] = False
-        return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name**?"})
-    
+        return jsonify({"response": "System reset. Welcome to ACME Plumbing. What is your **Name** to begin?"})
+
+    # 3. Add User Message to History (OpenAI Dictionary Format)
+    session["history"].append({"role": "user", "content": user_input})
+
+    # 4. Data Collection Logic (The "Form Filler")
     data = session["data"]
-    # Default response to prevent UnboundLocalError
-    display_response = "I'm sorry, I didn't quite catch that. Could you repeat it?"
-
-    # 2. Harvester Logic
-    emergency_keywords = ["help", "emergency", "leak", "problem", "burst", "water", "boiler", "repair", "reset", "clear"]
     
-    # Only capture name if it's NOT an emergency keyword and NOT too long
-    # 2. Harvester Logic
-    # Add greetings to this list so they don't get captured as names
-    ignore_keywords = [
-        "help", "emergency", "leak", "problem", "burst", "water", "boiler", "repair", 
-        "reset", "clear", "hi", "hello", "hey", "good morning", "good afternoon", "typing"
-    ]
-    
-    # --- NAME ---
     if not data["name"]:
-        # Check if the input contains any "ignore" words
-        is_ignored = any(word in user_input.lower() for word in ignore_keywords)
-        
-        # Only capture if it's 1-3 words AND doesn't contain a greeting/emergency word
-        if len(user_input.split()) < 4 and not is_ignored:
-            data["name"] = user_input.title()
-    
-    # --- EMAIL ---
-    email_match = re.search(r'[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]+', user_input)
-    if email_match: data["email"] = email_match.group(0)
-    
-    # --- PHONE ---
-    phone_match = re.search(r'(\d{10,15})', user_input.replace(" ", ""))
-    if phone_match: data["phone"] = phone_match.group(0)
-
-    # --- ADDRESS --- (Only if we have Name/Phone/Email but no Address)
-    if data["name"] and data["phone"] and data["email"] and not data["address"]:
-        if len(user_input) > 8 and not email_match and not phone_match:
-            data["address"] = user_input
-
-    # --- ISSUE --- (Only if we have Address but no Issue)
-    elif data["address"] and not data["issue"]:
-        # If the user sends a new message after the address, it MUST be the issue
-        if user_input.strip().lower() != data["address"].lower():
-            data["issue"] = user_input
-
-    session["data"] = data
-    # IMPORTANT: Watch your terminal for this print!
-    print(f"DEBUG DATA STATE: {session['data']}")
-
-    # 3. Trigger Email & Logging
-    if all(session["data"].values()) and not session.get("email_sent"):
-        print("--- !!! ALL DATA FOUND: PROCESSING LEAD !!! ---")
-        
-        # Send the Email
-        email_success = send_lead_email(session["data"]["email"])
-        
-        # Save to Excel/CSV
-        log_success = log_lead_to_csv(session["data"])
-        
-        if email_success:
-            session["email_sent"] = True
-            session["history"][0] = {"role": "system", "content": SUPPORT_PROMPT}
-    
-    # 4. Conversation Flow Logic
-    if not data["name"]:
-        display_response = "Welcome to ACME Plumbing. What is your **Name** to begin?"
+        data["name"] = user_input
+        response_text = "Thanks! What is a good **Phone Number** for the plumber to reach you?"
     elif not data["phone"]:
-        display_response = f"Thanks {data['name']}. What is a good **Phone Number** for the plumber to reach you?"
+        data["phone"] = user_input
+        response_text = "And what is your **Email Address** for the work order?"
     elif not data["email"]:
-        display_response = "And what is your **Email Address** for the work order?"
+        data["email"] = user_input
+        response_text = "Got it. What is the **Full Address** where the emergency is happening?"
     elif not data["address"]:
-        display_response = "Got it. What is the **Full Address** where the emergency is happening?"
+        data["address"] = user_input
+        response_text = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
     elif not data["issue"]:
-        display_response = "One last thing: **What is the plumbing emergency?** (e.g., burst pipe, leak)"
+        data["issue"] = user_input
+        
+        # --- ALL DATA COLLECTED: PROCESS LEAD ---
+        print(f"--- !!! ALL DATA FOUND: PROCESSING LEAD FOR {data['name']} !!! ---")
+        
+        if not session.get("email_sent"):
+            # This calls your function with the 'try/except' block
+            send_lead_email(data["email"]) 
+            session["email_sent"] = True
+        
+        # Now get the AI's response/advice for the emergency
+        response_text = get_chat_response(session["history"])
     else:
-        # If everything is captured, let the AI handle the supportive chat
-        session["history"].append({"role": "user", "content": user_input})
-        display_response = get_chat_response(session["history"])
+        # If all data is already collected, just let the AI handle the chat
+        response_text = get_chat_response(session["history"])
 
-    # 5. Final UI Polish & Save
-    if any(word in user_input.lower() for word in ["emergency", "help", "flood"]):
-        display_response += "\n\n🚨 **Call 0800-ACME-NOW for immediate dispatch.**"
-
-    session["history"].append({"role": "assistant", "content": display_response})
-    session.modified = True
-    return jsonify({"response": display_response})
+    # Update session data and save history
+    session["data"] = data
+    session["history"].append({"role": "assistant", "content": response_text})
+    
+    # CRITICAL: Tell Flask the session has changed so it saves to the cookie
+    session.modified = True 
+    
+    return jsonify({"response": response_text})
 
 if __name__ == '__main__':
     app.run(port=5001, debug=True)
