@@ -146,16 +146,22 @@ if prompt := st.chat_input("Enter details..."):
     
     reply = "" 
     
+    # --- STEP 1: NAME (The Gatekeeper) ---
+    # --- STEP 1: NAME ---
     if st.session_state.step == "name":
-        problem_keywords = ["problem", "help", "emergency", "leak", "burst", "water", "flood", "broken", "can you", "ive got"]
-        is_describing_problem = any(word in prompt.lower() for word in problem_keywords)
+        user_input = prompt.strip().lower()
         
-        if is_describing_problem or len(prompt.split()) > 4:
-            reply = "I'm sorry to hear that! I can definitely help. To get started, what is your **Full Name**?"
+        # 1. Check for greetings or "garbage" input
+        invalid_names = ["hi", "hello", "hey", "test", "yo", "plumber", "help"]
+        
+        if user_input in invalid_names or len(user_input) < 2:
+            reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
+            # IMPORTANT: Do NOT change st.session_state.step here
         else:
-            st.session_state.data["name"] = prompt
-            reply = f"Thank you, {prompt}. What is a good **Phone Number** for our plumber to reach you on?"
-            st.session_state.step = "phone"
+            # 2. If it looks like a real name, save it and MOVE to phone step
+            st.session_state.data["name"] = prompt.strip()
+            st.session_state.step = "phone" # NOW we move the step forward
+            reply = f"Thank you, {prompt.strip()}. What is the best **Phone Number** for our plumber to reach you on?"
 
     elif st.session_state.step == "phone":
         st.session_state.data["phone"] = prompt
