@@ -18,6 +18,23 @@ st.markdown("""
     <br>
     """, unsafe_allow_html=True)
 
+# --- STEP 1: NAME (The Airtight Gatekeeper) ---
+    if st.session_state.step == "name":
+        user_input = prompt.strip().lower()
+        
+        # 1. Expanded list of greetings and short-input check
+        greetings = ["hi", "hello", "hey", "test", "yo", "plumber", "help", "hi there", "hello there"]
+        
+        # 2. Check if the input is a greeting or too short
+        if user_input in greetings or len(user_input) < 3:
+            reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
+            # We do NOT change the step here.
+        else:
+            # 3. Valid name received -> Move to Phone step
+            st.session_state.data["name"] = prompt.strip()
+            st.session_state.step = "phone" 
+            reply = f"Thank you, {st.session_state.data['name']}. What is the best **Phone Number** for our plumber to reach you on?"
+
 # --- 2. INITIALIZE SESSION STATE ---
 if "data" not in st.session_state:
     st.session_state.data = {"name": None, "phone": None, "email": None, "address": None, "issue": None, "initial_advice": ""}
