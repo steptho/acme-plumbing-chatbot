@@ -18,23 +18,6 @@ st.markdown("""
     <br>
     """, unsafe_allow_html=True)
 
-# --- STEP 1: NAME (The Airtight Gatekeeper) ---
-        if st.session_state.step == "name":
-            user_input = prompt.strip().lower()
-        
-        # 1. Expanded list of greetings and short-input check
-        greetings = ["hi", "hello", "hey", "test", "yo", "plumber", "help", "hi there", "hello there"]
-        
-        # 2. Check if the input is a greeting or too short
-        if user_input in greetings or len(user_input) < 3:
-            reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
-            # We do NOT change the step here.
-        else:
-            # 3. Valid name received -> Move to Phone step
-            st.session_state.data["name"] = prompt.strip()
-            st.session_state.step = "phone" 
-            reply = f"Thank you, {st.session_state.data['name']}. What is the best **Phone Number** for our plumber to reach you on?"
-
 # --- 2. INITIALIZE SESSION STATE ---
 if "data" not in st.session_state:
     st.session_state.data = {"name": None, "phone": None, "email": None, "address": None, "issue": None, "initial_advice": ""}
@@ -79,7 +62,6 @@ def format_work_order_text(data):
     work_order_id = data.get('order_number', 'PENDING')
     current_date = datetime.now().strftime("%Y-%m-%d")
     advice = data.get('initial_advice', 'Locate your stopcock immediately.')
-    
     return f"""
 ==================================================
            ACME PLUMBING - OFFICIAL WORK ORDER
@@ -135,7 +117,6 @@ def send_work_order_email(data, email_body):
         msg['From'] = sender
         msg['To'] = data['email']
         msg['Cc'] = sender 
-
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(sender, password)
             server.send_message(msg)
@@ -154,21 +135,24 @@ if prompt := st.chat_input("Enter details..."):
     
     reply = "" 
     
+    # --- STEP 1: NAME ---
     if st.session_state.step == "name":
         user_input = prompt.strip().lower()
-        invalid_names = ["hi", "hello", "hey", "test", "yo", "plumber", "help"]
-        if user_input in invalid_names or len(user_input) < 2:
+        greetings = ["hi", "hello", "hey", "test", "yo", "plumber", "help", "hi there", "hello there"]
+        if user_input in greetings or len(user_input) < 3:
             reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
         else:
             st.session_state.data["name"] = prompt.strip()
             st.session_state.step = "phone"
-            reply = f"Thank you, {prompt.strip()}. What is the best **Phone Number** for our plumber to reach you on?"
+            reply = f"Thank you, {st.session_state.data['name']}. What is the best **Phone Number** for our plumber to reach you on?"
 
+    # --- STEP 2: PHONE ---
     elif st.session_state.step == "phone":
         st.session_state.data["phone"] = prompt
         reply = "And what is your **Email Address** for the work order?"
         st.session_state.step = "email"
 
+    # --- STEP 3: EMAIL ---
     elif st.session_state.step == "email":
         if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', prompt):
             st.session_state.data["email"] = prompt
@@ -177,39 +161,38 @@ if prompt := st.chat_input("Enter details..."):
         else:
             reply = "Please enter a valid email address."
 
+    # --- STEP 4: ADDRESS ---
     elif st.session_state.step == "address":
         st.session_state.data["address"] = prompt
         reply = "One last thing: **What is the plumbing emergency?**"
         st.session_state.step = "issue"
 
+    # --- STEP 5: ISSUE & FINALIZATION ---
     elif st.session_state.step == "issue":
         st.session_state.data["issue"] = prompt
         with st.spinner("🚨 Finalizing work order & logging lead..."):
-            # A. Generate Order Number
             order_no = get_next_order_number()
             st.session_state.data['order_number'] = order_no
             
-            # B. Get AI Advice
             advice_res = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": "Provide 3 short safety tips for this plumbing issue."}],
             )
             st.session_state.data['initial_advice'] = advice_res.choices[0].message.content
             
-            # C. Add Prices for Excel
+            # Add Prices for Excel
             st.session_state.data['call_out_fee'] = "£95.00"
             st.session_state.data['hourly_rate'] = "£65.00"
             
-            # D. Format the Full Text
+            # Format and Log
             full_work_order = format_work_order_text(st.session_state.data)
             st.session_state.work_order_text = full_work_order
-            
-            # E. Log and Send
             log_to_excel(st.session_state.data.copy())
+            
             email_status = send_work_order_email(st.session_state.data, full_work_order)
             
             if email_status is True:
-                reply = f"### ✅ Dispatch Confirmed! (Order #{order_no})\n\nHelp is on the way! I have sent the full work order to **{st.session_state.data['email']}**."
+                reply = f"### ✅ Dispatch Confirmed! (Order #{order_no})\n\nHelp is on the way! I have sent the work order to **{st.session_state.data['email']}**."
             else:
                 reply = f"Order #{order_no} logged, but email failed: {email_status}"
         
@@ -221,7 +204,7 @@ if prompt := st.chat_input("Enter details..."):
 # --- 6. DISPLAY WORK ORDER ---
 if st.session_state.step == "complete" and st.session_state.work_order_text:
     st.divider()
-    st.text(st.session_state.work_order_text) # Displays the exact ASCII format
+    st.text(st.session_state.work_order_text)
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
@@ -240,3 +223,4 @@ with st.sidebar:
             if os.path.exists("acme_leads.xlsx"):
                 with open("acme_leads.xlsx", "rb") as f:
                     st.download_button("📥 Download Excel", f, "acme_leads.xlsx")
+                    
