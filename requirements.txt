@@ -1,6 +1,4 @@
-openai>=1.0.0
-flask
-flask-mail
-flask-limiter
-python-dotenv
-gunicorn
+streamlit
+pandas
+openai
+openpyxl
