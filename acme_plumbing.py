@@ -25,39 +25,32 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "step" not in st.session_state:
     st.session_state.step = "name"
+if "work_order_text" not in st.session_state:
+    st.session_state.work_order_text = ""
 
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except:
     st.error("Missing OpenAI API Key.")
 
+# --- 3. HELPER FUNCTIONS ---
 def get_next_order_number():
     file_name = "order_number.txt"
-    # If the file doesn't exist, start at 1000
     if not os.path.exists(file_name):
         with open(file_name, "w") as f:
             f.write("1000")
         return 1000
-    
-    # Read the current number
     with open(file_name, "r") as f:
         current_no = int(f.read().strip())
-    
-    # Increment and save back
     next_no = current_no + 1
     with open(file_name, "w") as f:
         f.write(str(next_no))
-    
     return next_no
-    
+
 def log_to_excel(data):
     file_name = "acme_leads.xlsx"
-    # Ensure the order number and timestamp are in the data
-    # (The order number will be added to the data dictionary in Step 5)
     data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     new_lead = pd.DataFrame([data])
-    
     if not os.path.isfile(file_name):
         new_lead.to_excel(file_name, index=False)
     else:
@@ -65,16 +58,12 @@ def log_to_excel(data):
         updated_df = pd.concat([existing_df, new_lead], ignore_index=True)
         updated_df.to_excel(file_name, index=False)
 
-# --- 3. EMAIL FUNCTION ---
-def send_work_order(data):
-    # Use the number we already generated
+def format_work_order_text(data):
     work_order_id = data.get('order_number', 'PENDING')
     current_date = datetime.now().strftime("%Y-%m-%d")
-    # ... (rest of the email logic)
-    
     advice = data.get('initial_advice', 'Locate your stopcock immediately.')
-
-    email_body = f"""
+    
+    return f"""
 ==================================================
            ACME PLUMBING - OFFICIAL WORK ORDER
 ==================================================
@@ -119,11 +108,13 @@ IMPORTANT INSTRUCTIONS:
    technician's call.
 ==================================================
 """
+
+def send_work_order_email(data, email_body):
     try:
         sender = st.secrets["MAIL_USERNAME"]
         password = st.secrets["MAIL_PASSWORD"]
         msg = MIMEText(email_body)
-        msg['Subject'] = f"URGENT: Work Order {work_order_id} - {data['name']}"
+        msg['Subject'] = f"URGENT: Work Order {data['order_number']} - {data['name']}"
         msg['From'] = sender
         msg['To'] = data['email']
         msg['Cc'] = sender 
@@ -131,9 +122,9 @@ IMPORTANT INSTRUCTIONS:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(sender, password)
             server.send_message(msg)
-        return True, work_order_id
+        return True
     except Exception as e:
-        return False, str(e)
+        return str(e)
 
 # --- 4. DISPLAY CHAT ---
 for msg in st.session_state.chat_history:
@@ -146,21 +137,14 @@ if prompt := st.chat_input("Enter details..."):
     
     reply = "" 
     
-    # --- STEP 1: NAME (The Gatekeeper) ---
-    # --- STEP 1: NAME ---
     if st.session_state.step == "name":
         user_input = prompt.strip().lower()
-        
-        # 1. Check for greetings or "garbage" input
         invalid_names = ["hi", "hello", "hey", "test", "yo", "plumber", "help"]
-        
         if user_input in invalid_names or len(user_input) < 2:
             reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
-            # IMPORTANT: Do NOT change st.session_state.step here
         else:
-            # 2. If it looks like a real name, save it and MOVE to phone step
             st.session_state.data["name"] = prompt.strip()
-            st.session_state.step = "phone" # NOW we move the step forward
+            st.session_state.step = "phone"
             reply = f"Thank you, {prompt.strip()}. What is the best **Phone Number** for our plumber to reach you on?"
 
     elif st.session_state.step == "phone":
@@ -184,54 +168,58 @@ if prompt := st.chat_input("Enter details..."):
     elif st.session_state.step == "issue":
         st.session_state.data["issue"] = prompt
         with st.spinner("🚨 Finalizing work order & logging lead..."):
-            # 1. Get the order number and AI advice
+            # A. Generate Order Number
             order_no = get_next_order_number()
             st.session_state.data['order_number'] = order_no
             
+            # B. Get AI Advice
             advice_res = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": "Provide 3 short safety tips for this plumbing issue."}],
             )
             st.session_state.data['initial_advice'] = advice_res.choices[0].message.content
             
-            # --- 2. ADD PRICING TO DATA FOR EXCEL ---
+            # C. Add Prices for Excel
             st.session_state.data['call_out_fee'] = "£95.00"
             st.session_state.data['hourly_rate'] = "£65.00"
-            st.session_state.data['disclaimer'] = "Estimate only. Final bill may vary based on complexity and parts."
             
-            # 3. Log to Excel (Now including the prices)
+            # D. Format the Full Text
+            full_work_order = format_work_order_text(st.session_state.data)
+            st.session_state.work_order_text = full_work_order
+            
+            # E. Log and Send
             log_to_excel(st.session_state.data.copy())
+            email_status = send_work_order_email(st.session_state.data, full_work_order)
             
-            # 4. Send the email
-            success, info = send_work_order(st.session_state.data)
-            
-            if success:
-                reply = (f"### ✅ Dispatch Confirmed! (Work Order #{order_no})\n\n"
-                        f"Help is on the way! A plumber will call you shortly.")
+            if email_status is True:
+                reply = f"### ✅ Dispatch Confirmed! (Order #{order_no})\n\nHelp is on the way! I have sent the full work order to **{st.session_state.data['email']}**."
             else:
-                reply = f"Details logged as Order #{order_no}, but email failed."
+                reply = f"Order #{order_no} logged, but email failed: {email_status}"
         
-        st.session_state.step = "chatting"
+        st.session_state.step = "complete"
 
-    elif st.session_state.step == "chatting":
-        with st.spinner("AI Dispatcher is thinking..."):
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": "You are a professional dispatcher for ACME Plumbing."}] + st.session_state.chat_history
-            )
-            reply = response.choices[0].message.content
-
-    # SAVE AND RERUN (CRITICAL FIX)
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
     st.rerun()
 
-# --- 6. SIDEBAR ---
+# --- 6. DISPLAY WORK ORDER ---
+if st.session_state.step == "complete" and st.session_state.work_order_text:
+    st.divider()
+    st.text(st.session_state.work_order_text) # Displays the exact ASCII format
+
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.header("Admin Tools")
-    st.info(f"Status: {st.session_state.step.upper()}")
     if st.button("🗑️ Reset Dispatch Bot"):
-        st.session_state.data = {"name": None, "phone": None, "email": None, "address": None, "issue": None}
+        st.session_state.data = {"name": None, "phone": None, "email": None, "address": None, "issue": None, "initial_advice": ""}
         st.session_state.chat_history = []
         st.session_state.step = "name"
+        st.session_state.work_order_text = ""
         st.rerun()
     
+    st.divider()
+    with st.expander("🔐 Download Leads"):
+        admin_pass = st.text_input("Admin Password", type="password")
+        if admin_pass == "ACME123":
+            if os.path.exists("acme_leads.xlsx"):
+                with open("acme_leads.xlsx", "rb") as f:
+                    st.download_button("📥 Download Excel", f, "acme_leads.xlsx")
