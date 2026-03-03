@@ -19,8 +19,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- STEP 1: NAME (The Airtight Gatekeeper) ---
-    if st.session_state.step == "name":
-        user_input = prompt.strip().lower()
+        if st.session_state.step == "name":
+            user_input = prompt.strip().lower()
         
         # 1. Expanded list of greetings and short-input check
         greetings = ["hi", "hello", "hey", "test", "yo", "plumber", "help", "hi there", "hello there"]
