@@ -28,7 +28,7 @@ if "step" not in st.session_state:
 if "work_order_text" not in st.session_state:
     st.session_state.work_order_text = ""
 
-# ✅ NEW: Start conversation automatically
+# Start conversation automatically
 if len(st.session_state.chat_history) == 0:
     welcome_msg = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
     st.session_state.chat_history.append({"role": "assistant", "content": welcome_msg})
@@ -39,6 +39,7 @@ except:
     st.error("Missing OpenAI API Key.")
 
 # --- 3. HELPER FUNCTIONS ---
+
 def get_next_order_number():
     file_name = "order_number.txt"
     if not os.path.exists(file_name):
@@ -52,16 +53,23 @@ def get_next_order_number():
         f.write(str(next_no))
     return next_no
 
-def log_to_excel(data):
-    file_name = "acme_leads.xlsx"
-    data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_lead = pd.DataFrame([data])
-    if not os.path.isfile(file_name):
-        new_lead.to_excel(file_name, index=False)
-    else:
-        existing_df = pd.read_excel(file_name)
-        updated_df = pd.concat([existing_df, new_lead], ignore_index=True)
-        updated_df.to_excel(file_name, index=False)
+# ✅ NEW: CSV logging (reliable)
+def log_to_csv(data):
+    try:
+        file_name = os.path.join(os.getcwd(), "acme_leads.csv")
+
+        data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        df = pd.DataFrame([data])
+
+        if not os.path.isfile(file_name):
+            df.to_csv(file_name, index=False)
+        else:
+            df.to_csv(file_name, mode='a', header=False, index=False)
+
+        st.success(f"✅ Lead saved to: {file_name}")
+
+    except Exception as e:
+        st.error(f"❌ Logging failed: {e}")
 
 def format_work_order_text(data):
     work_order_id = data.get('order_number', 'PENDING')
@@ -99,17 +107,9 @@ ESTIMATED COSTS (Emergency Call-Out):
 
 *All prices are subject to VAT where applicable.*
 --------------------------------------------------
-IMPORTANT DISCLAIMER:
-The figures provided above are estimates for the initial
-emergency response. The final bill may vary based on
-the complexity of the repair, time spent on-site, and
-any specialized parts required.
---------------------------------------------------
 IMPORTANT INSTRUCTIONS:
-1. Locate your internal stopcock and turn it
-   CLOCKWISE immediately to stop water flow.
-2. Please keep your phone line clear for the 
-   technician's call.
+1. Locate your internal stopcock and turn it CLOCKWISE immediately.
+2. Keep your phone line clear for the technician.
 ==================================================
 """
 
@@ -140,7 +140,7 @@ if prompt := st.chat_input("Enter details..."):
     
     reply = "" 
     
-    # --- STEP 1: NAME (FIXED) ---
+    # STEP 1: NAME
     if st.session_state.step == "name":
         user_input = prompt.strip()
 
@@ -149,80 +149,77 @@ if prompt := st.chat_input("Enter details..."):
         else:
             st.session_state.data["name"] = user_input
             st.session_state.step = "phone"
-            reply = f"Thank you, {st.session_state.data['name']}. What is the best **Phone Number** for our plumber to reach you on?"
+            reply = f"Thank you, {user_input}. What is the best **Phone Number** for our plumber to reach you on?"
 
-    # --- STEP 2: PHONE ---
+    # STEP 2: PHONE
     elif st.session_state.step == "phone":
         st.session_state.data["phone"] = prompt
         reply = "And what is your **Email Address** for the work order?"
         st.session_state.step = "email"
 
-    # --- STEP 3: EMAIL ---
+    # STEP 3: EMAIL
     elif st.session_state.step == "email":
-        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', prompt):
+        if re.match(r'^[^@]+@[^@]+\.[^@]+$', prompt):
             st.session_state.data["email"] = prompt
             reply = "Got it. What is the **Full Address** of the emergency?"
             st.session_state.step = "address"
         else:
             reply = "Please enter a valid email address."
 
-    # --- STEP 4: ADDRESS ---
+    # STEP 4: ADDRESS
     elif st.session_state.step == "address":
         st.session_state.data["address"] = prompt
         reply = "One last thing: **What is the plumbing emergency?**"
         st.session_state.step = "issue"
 
-    # --- STEP 5: ISSUE & FINALIZATION ---
+    # STEP 5: ISSUE
     elif st.session_state.step == "issue":
         st.session_state.data["issue"] = prompt
-        with st.spinner("🚨 Finalizing work order & logging lead..."):
+
+        with st.spinner("🚨 Finalizing work order..."):
             order_no = get_next_order_number()
             st.session_state.data['order_number'] = order_no
-            
+
             advice_res = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": "Provide 3 short safety tips for this plumbing issue."}],
             )
             st.session_state.data['initial_advice'] = advice_res.choices[0].message.content
-            
-            st.session_state.data['call_out_fee'] = "£95.00"
-            st.session_state.data['hourly_rate'] = "£65.00"
-            
+
+            # Save lead ✅
+            log_to_csv(st.session_state.data.copy())
+
             full_work_order = format_work_order_text(st.session_state.data)
             st.session_state.work_order_text = full_work_order
-            log_to_excel(st.session_state.data.copy())
-            
+
             email_status = send_work_order_email(st.session_state.data, full_work_order)
-            
+
             if email_status is True:
-                reply = f"### ✅ Dispatch Confirmed! (Order #{order_no})\n\nHelp is on the way! I have sent the work order to **{st.session_state.data['email']}**."
+                reply = f"### ✅ Dispatch Confirmed! (Order #{order_no})\n\nWork order sent to **{st.session_state.data['email']}**."
             else:
-                reply = f"Order #{order_no} logged, but email failed: {email_status}"
-        
+                reply = f"Order #{order_no} saved, but email failed: {email_status}"
+
         st.session_state.step = "complete"
 
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
     st.rerun()
 
 # --- 6. DISPLAY WORK ORDER ---
-if st.session_state.step == "complete" and st.session_state.work_order_text:
+if st.session_state.step == "complete":
     st.divider()
     st.text(st.session_state.work_order_text)
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.header("Admin Tools")
+
     if st.button("🗑️ Reset Dispatch Bot"):
-        st.session_state.data = {"name": None, "phone": None, "email": None, "address": None, "issue": None, "initial_advice": ""}
-        st.session_state.chat_history = []
-        st.session_state.step = "name"
-        st.session_state.work_order_text = ""
+        st.session_state.clear()
         st.rerun()
-    
+
     st.divider()
-    with st.expander("🔐 Download Leads"):
-        admin_pass = st.text_input("Admin Password", type="password")
-        if admin_pass == "ACME123":
-            if os.path.exists("acme_leads.xlsx"):
-                with open("acme_leads.xlsx", "rb") as f:
-                    st.download_button("📥 Download Excel", f, "acme_leads.xlsx")
+
+    # ✅ Download CSV
+    if os.path.exists("acme_leads.csv"):
+        with open("acme_leads.csv", "rb") as f:
+            st.download_button("📥 Download Leads CSV", f, "acme_leads.csv")
