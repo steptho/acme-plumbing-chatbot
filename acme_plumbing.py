@@ -28,6 +28,11 @@ if "step" not in st.session_state:
 if "work_order_text" not in st.session_state:
     st.session_state.work_order_text = ""
 
+# ✅ NEW: Start conversation automatically
+if len(st.session_state.chat_history) == 0:
+    welcome_msg = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
+    st.session_state.chat_history.append({"role": "assistant", "content": welcome_msg})
+
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except:
@@ -135,14 +140,14 @@ if prompt := st.chat_input("Enter details..."):
     
     reply = "" 
     
-    # --- STEP 1: NAME ---
+    # --- STEP 1: NAME (FIXED) ---
     if st.session_state.step == "name":
-        user_input = prompt.strip().lower()
-        greetings = ["hi", "hello", "hey", "test", "yo", "plumber", "help", "hi there", "hello there"]
-        if user_input in greetings or len(user_input) < 3:
-            reply = "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
+        user_input = prompt.strip()
+
+        if len(user_input.split()) < 2:
+            reply = "Please enter your **full name** (first and last name)."
         else:
-            st.session_state.data["name"] = prompt.strip()
+            st.session_state.data["name"] = user_input
             st.session_state.step = "phone"
             reply = f"Thank you, {st.session_state.data['name']}. What is the best **Phone Number** for our plumber to reach you on?"
 
@@ -180,11 +185,9 @@ if prompt := st.chat_input("Enter details..."):
             )
             st.session_state.data['initial_advice'] = advice_res.choices[0].message.content
             
-            # Add Prices for Excel
             st.session_state.data['call_out_fee'] = "£95.00"
             st.session_state.data['hourly_rate'] = "£65.00"
             
-            # Format and Log
             full_work_order = format_work_order_text(st.session_state.data)
             st.session_state.work_order_text = full_work_order
             log_to_excel(st.session_state.data.copy())
@@ -223,4 +226,3 @@ with st.sidebar:
             if os.path.exists("acme_leads.xlsx"):
                 with open("acme_leads.xlsx", "rb") as f:
                     st.download_button("📥 Download Excel", f, "acme_leads.xlsx")
-                    
