@@ -7,27 +7,34 @@ from datetime import datetime
 import pandas as pd
 import os
 
-# --- 1. CONFIGURATION & BANNER ---
+# ----------------------------
+# CONFIG
+# ----------------------------
 st.set_page_config(page_title="ACME Plumbing Dispatch", page_icon="🔧")
 
 st.markdown("""
     <div style="background-color:#0056b3;padding:15px;border-radius:10px;border: 2px solid #004494;">
     <h1 style="color:white;text-align:center;margin:0;">🔧 ACME PLUMBING</h1>
-    <p style="color:white;text-align:center;margin:5px 0 0 0;font-weight:bold;">24/7 Emergency Dispatch System</p>
+    <p style="color:white;text-align:center;margin:5px 0 0 0;font-weight:bold;">
+    24/7 Emergency Dispatch System</p>
     </div>
     <br>
 """, unsafe_allow_html=True)
 
-# --- 2. SAFE API KEY LOADING (FIXED) ---
+# ----------------------------
+# API KEY (FIXED - LOCAL ONLY)
+# ----------------------------
 api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ Missing OPENAI_API_KEY. Set it in PowerShell or system environment variables.")
+    st.error("❌ Missing OPENAI_API_KEY. Set it in Windows environment variables.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
-# --- 3. SESSION STATE ---
+# ----------------------------
+# SESSION STATE
+# ----------------------------
 if "data" not in st.session_state:
     st.session_state.data = {
         "name": None,
@@ -47,43 +54,47 @@ if "step" not in st.session_state:
 if "work_order_text" not in st.session_state:
     st.session_state.work_order_text = ""
 
-# --- WELCOME MESSAGE ---
+# ----------------------------
+# WELCOME MESSAGE
+# ----------------------------
 if len(st.session_state.chat_history) == 0:
     st.session_state.chat_history.append({
         "role": "assistant",
-        "content": "Hello! Please start by entering your **Full Name**."
+        "content": "Hello! Please enter your **Full Name** to begin."
     })
 
-# --- 4. FUNCTIONS ---
+# ----------------------------
+# FUNCTIONS
+# ----------------------------
 def get_next_order_number():
-    file_name = "order_number.txt"
+    file = "order_number.txt"
 
-    if not os.path.exists(file_name):
-        with open(file_name, "w") as f:
+    if not os.path.exists(file):
+        with open(file, "w") as f:
             f.write("1000")
         return 1000
 
-    with open(file_name, "r") as f:
-        current = int(f.read().strip())
+    with open(file, "r") as f:
+        num = int(f.read().strip())
 
-    next_no = current + 1
+    num += 1
 
-    with open(file_name, "w") as f:
-        f.write(str(next_no))
+    with open(file, "w") as f:
+        f.write(str(num))
 
-    return next_no
+    return num
 
 
 def log_to_csv(data):
-    file_name = "acme_leads.csv"
-
+    file = "acme_leads.csv"
     data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     df = pd.DataFrame([data])
 
-    if not os.path.exists(file_name):
-        df.to_csv(file_name, index=False)
+    if not os.path.exists(file):
+        df.to_csv(file, index=False)
     else:
-        df.to_csv(file_name, mode="a", header=False, index=False)
+        df.to_csv(file, mode="a", header=False, index=False)
 
 
 def format_work_order(data):
@@ -92,7 +103,7 @@ def format_work_order(data):
         ACME PLUMBING WORK ORDER
 ========================================
 ORDER #: {data['order_number']}
-DATE: {datetime.now().strftime("%Y-%m-%d")}
+DATE: {datetime.now().strftime('%Y-%m-%d')}
 ----------------------------------------
 NAME: {data['name']}
 PHONE: {data['phone']}
@@ -104,7 +115,7 @@ ADDRESS:
 ISSUE:
 {data['issue']}
 ----------------------------------------
-ADVICE:
+SAFETY ADVICE:
 {data['initial_advice']}
 ========================================
 """
@@ -132,15 +143,18 @@ def send_email(data, body):
     except Exception as e:
         return str(e)
 
-# --- 5. DISPLAY CHAT ---
+# ----------------------------
+# CHAT DISPLAY
+# ----------------------------
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 6. CHAT FLOW ---
+# ----------------------------
+# CHAT INPUT FLOW
+# ----------------------------
 if prompt := st.chat_input("Enter details..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
-
     reply = ""
 
     # NAME
@@ -156,7 +170,7 @@ if prompt := st.chat_input("Enter details..."):
     elif st.session_state.step == "phone":
         st.session_state.data["phone"] = prompt
         st.session_state.step = "email"
-        reply = "What is your email?"
+        reply = "What is your email address?"
 
     # EMAIL
     elif st.session_state.step == "email":
@@ -171,9 +185,9 @@ if prompt := st.chat_input("Enter details..."):
     elif st.session_state.step == "address":
         st.session_state.data["address"] = prompt
         st.session_state.step = "issue"
-        reply = "Describe the issue."
+        reply = "Describe the plumbing issue."
 
-    # ISSUE + FINAL STEP
+    # ISSUE + FINAL
     elif st.session_state.step == "issue":
         st.session_state.data["issue"] = prompt
 
@@ -181,7 +195,7 @@ if prompt := st.chat_input("Enter details..."):
             order_no = get_next_order_number()
             st.session_state.data["order_number"] = order_no
 
-            ai_response = client.chat.completions.create(
+            ai = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{
                     "role": "user",
@@ -189,7 +203,7 @@ if prompt := st.chat_input("Enter details..."):
                 }]
             )
 
-            st.session_state.data["initial_advice"] = ai_response.choices[0].message.content
+            st.session_state.data["initial_advice"] = ai.choices[0].message.content
 
             log_to_csv(st.session_state.data.copy())
 
@@ -199,7 +213,7 @@ if prompt := st.chat_input("Enter details..."):
             email_result = send_email(st.session_state.data, work_order)
 
             if email_result is True:
-                reply = f"✅ Work order #{order_no} sent successfully!"
+                reply = f"✅ Work order #{order_no} created and sent!"
             else:
                 reply = f"Saved order #{order_no}, email failed: {email_result}"
 
@@ -208,12 +222,16 @@ if prompt := st.chat_input("Enter details..."):
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
     st.rerun()
 
-# --- 7. OUTPUT WORK ORDER ---
+# ----------------------------
+# OUTPUT
+# ----------------------------
 if st.session_state.step == "complete":
     st.divider()
     st.text(st.session_state.work_order_text)
 
-# --- 8. SIDEBAR ---
+# ----------------------------
+# SIDEBAR
+# ----------------------------
 with st.sidebar:
     st.header("Admin")
 
@@ -223,4 +241,4 @@ with st.sidebar:
 
     if os.path.exists("acme_leads.csv"):
         with open("acme_leads.csv", "rb") as f:
-            st.download_button("Download Leads", f, "acme_leads.csv")
+            st.download_button("Download Leads CSV", f, "acme_leads.csv")
