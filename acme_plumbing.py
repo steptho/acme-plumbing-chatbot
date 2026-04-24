@@ -18,23 +18,16 @@ st.markdown("""
     <br>
 """, unsafe_allow_html=True)
 
-# --- SAFE SECRET LOADING ---
-def get_secret(key):
-    try:
-        return st.secrets[key]
-    except Exception:
-        return os.getenv(key)
-
-# --- OpenAI CLIENT (FIXED) ---
-api_key = get_secret("OPENAI_API_KEY")
+# --- 2. SAFE API KEY LOADING (FIXED) ---
+api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ Missing OPENAI_API_KEY. Set it in environment variables or Streamlit secrets.")
+    st.error("❌ Missing OPENAI_API_KEY. Set it in PowerShell or system environment variables.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
 
-# --- 2. SESSION STATE ---
+# --- 3. SESSION STATE ---
 if "data" not in st.session_state:
     st.session_state.data = {
         "name": None,
@@ -54,25 +47,26 @@ if "step" not in st.session_state:
 if "work_order_text" not in st.session_state:
     st.session_state.work_order_text = ""
 
-# --- Welcome message ---
+# --- WELCOME MESSAGE ---
 if len(st.session_state.chat_history) == 0:
     st.session_state.chat_history.append({
         "role": "assistant",
-        "content": "Hello! I'd love to get a plumber out to you. Could you please start by telling me your **Full Name**?"
+        "content": "Hello! Please start by entering your **Full Name**."
     })
 
-# --- 3. FUNCTIONS ---
+# --- 4. FUNCTIONS ---
 def get_next_order_number():
     file_name = "order_number.txt"
+
     if not os.path.exists(file_name):
         with open(file_name, "w") as f:
             f.write("1000")
         return 1000
 
     with open(file_name, "r") as f:
-        current_no = int(f.read().strip())
+        current = int(f.read().strip())
 
-    next_no = current_no + 1
+    next_no = current + 1
 
     with open(file_name, "w") as f:
         f.write(str(next_no))
@@ -81,58 +75,55 @@ def get_next_order_number():
 
 
 def log_to_csv(data):
-    try:
-        file_name = "acme_leads.csv"
+    file_name = "acme_leads.csv"
 
-        data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        df = pd.DataFrame([data])
+    data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df = pd.DataFrame([data])
 
-        if not os.path.isfile(file_name):
-            df.to_csv(file_name, index=False)
-        else:
-            df.to_csv(file_name, mode='a', header=False, index=False)
-
-    except Exception as e:
-        st.error(f"Logging failed: {e}")
+    if not os.path.exists(file_name):
+        df.to_csv(file_name, index=False)
+    else:
+        df.to_csv(file_name, mode="a", header=False, index=False)
 
 
-def format_work_order_text(data):
+def format_work_order(data):
     return f"""
-==================================================
-           ACME PLUMBING - OFFICIAL WORK ORDER
-==================================================
-WORK ORDER ID: {data.get('order_number','PENDING')}
+========================================
+        ACME PLUMBING WORK ORDER
+========================================
+ORDER #: {data['order_number']}
 DATE: {datetime.now().strftime("%Y-%m-%d")}
---------------------------------------------------
-CUSTOMER:
-{data['name']} | {data['phone']} | {data['email']}
+----------------------------------------
+NAME: {data['name']}
+PHONE: {data['phone']}
+EMAIL: {data['email']}
 
 ADDRESS:
 {data['address']}
 
 ISSUE:
 {data['issue']}
---------------------------------------------------
+----------------------------------------
 ADVICE:
 {data['initial_advice']}
-==================================================
+========================================
 """
 
 
-def send_work_order_email(data, email_body):
+def send_email(data, body):
     try:
-        sender = get_secret("MAIL_USERNAME")
-        password = get_secret("MAIL_PASSWORD")
+        sender = os.getenv("MAIL_USERNAME")
+        password = os.getenv("MAIL_PASSWORD")
 
         if not sender or not password:
             return "Missing email credentials"
 
-        msg = MIMEText(email_body)
-        msg['Subject'] = f"URGENT: Work Order {data['order_number']} - {data['name']}"
-        msg['From'] = sender
-        msg['To'] = data['email']
+        msg = MIMEText(body)
+        msg["Subject"] = f"Work Order #{data['order_number']}"
+        msg["From"] = sender
+        msg["To"] = data["email"]
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(sender, password)
             server.send_message(msg)
 
@@ -141,56 +132,56 @@ def send_work_order_email(data, email_body):
     except Exception as e:
         return str(e)
 
-# --- 4. DISPLAY CHAT ---
+# --- 5. DISPLAY CHAT ---
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 5. CHAT LOGIC ---
+# --- 6. CHAT FLOW ---
 if prompt := st.chat_input("Enter details..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
 
     reply = ""
 
-    # STEP 1: NAME
+    # NAME
     if st.session_state.step == "name":
         if len(prompt.split()) < 2:
             reply = "Please enter your full name."
         else:
             st.session_state.data["name"] = prompt
             st.session_state.step = "phone"
-            reply = "Thanks. What is your phone number?"
+            reply = "What is your phone number?"
 
-    # STEP 2: PHONE
+    # PHONE
     elif st.session_state.step == "phone":
         st.session_state.data["phone"] = prompt
         st.session_state.step = "email"
-        reply = "What is your email address?"
+        reply = "What is your email?"
 
-    # STEP 3: EMAIL
+    # EMAIL
     elif st.session_state.step == "email":
         if re.match(r'^[^@]+@[^@]+\.[^@]+$', prompt):
             st.session_state.data["email"] = prompt
             st.session_state.step = "address"
-            reply = "What is the full address?"
+            reply = "What is your address?"
         else:
-            reply = "Please enter a valid email address."
+            reply = "Invalid email. Try again."
 
-    # STEP 4: ADDRESS
+    # ADDRESS
     elif st.session_state.step == "address":
         st.session_state.data["address"] = prompt
         st.session_state.step = "issue"
-        reply = "What is the plumbing issue?"
+        reply = "Describe the issue."
 
-    # STEP 5: ISSUE + FINAL
+    # ISSUE + FINAL STEP
     elif st.session_state.step == "issue":
         st.session_state.data["issue"] = prompt
 
-        with st.spinner("Finalising work order..."):
+        with st.spinner("Creating work order..."):
             order_no = get_next_order_number()
             st.session_state.data["order_number"] = order_no
 
-            advice = client.chat.completions.create(
+            ai_response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{
                     "role": "user",
@@ -198,38 +189,38 @@ if prompt := st.chat_input("Enter details..."):
                 }]
             )
 
-            st.session_state.data["initial_advice"] = advice.choices[0].message.content
+            st.session_state.data["initial_advice"] = ai_response.choices[0].message.content
 
             log_to_csv(st.session_state.data.copy())
 
-            work_order = format_work_order_text(st.session_state.data)
+            work_order = format_work_order(st.session_state.data)
             st.session_state.work_order_text = work_order
 
-            email_status = send_work_order_email(st.session_state.data, work_order)
+            email_result = send_email(st.session_state.data, work_order)
 
-            if email_status is True:
-                reply = f"✅ Dispatch Confirmed! Work order #{order_no} sent."
+            if email_result is True:
+                reply = f"✅ Work order #{order_no} sent successfully!"
             else:
-                reply = f"Saved order #{order_no}, email failed: {email_status}"
+                reply = f"Saved order #{order_no}, email failed: {email_result}"
 
         st.session_state.step = "complete"
 
     st.session_state.chat_history.append({"role": "assistant", "content": reply})
     st.rerun()
 
-# --- 6. OUTPUT ---
+# --- 7. OUTPUT WORK ORDER ---
 if st.session_state.step == "complete":
     st.divider()
     st.text(st.session_state.work_order_text)
 
-# --- 7. SIDEBAR ---
+# --- 8. SIDEBAR ---
 with st.sidebar:
-    st.header("Admin Tools")
+    st.header("Admin")
 
-    if st.button("Reset Bot"):
+    if st.button("Reset System"):
         st.session_state.clear()
         st.rerun()
 
     if os.path.exists("acme_leads.csv"):
         with open("acme_leads.csv", "rb") as f:
-            st.download_button("Download Leads CSV", f, "acme_leads.csv")
+            st.download_button("Download Leads", f, "acme_leads.csv")
